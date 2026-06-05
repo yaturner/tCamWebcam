@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+
+'''
+Streamtest is a simple utility to demonstrate streaming the frames from a tCam-Mini
+to a canvas in real time.
+
+author: bitreaper
+author: AhJim
+'''
+
+import base64
+import argparse
+import numpy as np
+from tcam import TCam
+from tkinter import *
+from array import array
+from PIL import Image, ImageTk, ImageDraw
+from threading import Event
+import time
+import io
+import os
+import threading
+from flask import Flask, Response, render_template_string, send_file, jsonify, Response, request
+import queue
+import sys
+from palettes import *
+
+app = Flask(__name__)
+
+# Shared global variables for thread safety
+frame_image = None
+frame_lock = threading.Lock()
+tcam = None
+CURRENT_PALETTE = double_rainbow.double_rainbow_palette
+IMAGE_PATH="./thermalImage.jpg"
+IP_ADDRESS = "192.168.4.1"
+SLEEP_TIME = 0.03
+IMAGE_MIN = 0.0
+IMAGE_MAX = 0.0
+T_LINEAR_RES = 0.01
+PALETTE_DATA = {
+    "black_hot":black_hot.black_hot_palette,
+    "blue_red":blue_red.blue_red_palette,
+    "coldest":coldest.coldest_palette,
+    "double_rainbow":double_rainbow.double_rainbow_palette,
+    "fusion":fusion.fusion_palette,
+    "glowbow":glowbow.glowbow_palette,
+    "gray":gray.gray_palette,
+    "gray_red":gray_red.gray_red_palette,
+    "hottest":hottest.hottest_palette,
+    "ironblack":ironblack.ironblack_palette,
+    "lava":lava.lava_palette,
+    "medical":medical.medical_palette,
+    "rainbow":rainbow.rainbow_palette,
+    "wheel2":wheel2.wheel2_palette
+}
+chosen = "double_rainbow" # initial palette chose
+
+# Frontend HTML Framework
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bambu Labs A1 tream</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background: #222; color: #fff; }
+        .container { margin-top: 30px; }
+        
+        /* Controls wrapper styling */
+        .controls { margin-bottom: 20px; }
+        select { 
+            padding: 8px 12px; 
+            font-size: 14px; 
+            background: #444; 
+            color: #fff; 
+            border: 1px solid #555; 
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .stream-wrapper {
+            display: inline-flex;
+            align-items: stretch;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        img { border: 4px solid #555; border-radius: 8px; max-width: 100%; height: auto; display: block; }
+
+        .colorbar-container {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .colorbar {
+            width: 25px;
+            flex-grow: 1;
+            margin: 5px 0;
+            border: 2px solid #555;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Bambu Labs A1 Web Feed</h1>
+        
+        <div class="controls">
+            <label for="palette-select">Choose Palette: </label>
+            <select id="palette-select">
+                </select>
+        </div>
+        
+        <div class="stream-wrapper">
+            <img src="/video_feed" alt="Raspberry Pi Live Stream" />
+
+            <div class="colorbar-container">
+                <div id="max-label" class="label">--</div>
+                <div id="color-bar" class="colorbar"></div>
+                <div id="min-label" class="label">--</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let dropdownPopulated = false;
+
+        function updateColorbar() {
+            fetch('/colorbar_config')
+                .then(response => response.json())
+                .then(data => {
+                    // 1. Populate the dropdown menu options once
+                    if (!dropdownPopulated) {
+                        const selectEl = document.getElementById('palette-select');
+                        data.all_palettes.forEach(name => {
+                            let option = document.createElement('option');
+                            option.value = name;
+                            option.innerText = name;
+                            if (name === data.current_palette) option.selected = true;
+                            selectEl.appendChild(option);
+                        });
+                        dropdownPopulated = true;
+                    }
+
+                    // 2. Dynamically update text labels
+                    document.getElementById('max-label').innerText = data.max_val;
+                    document.getElementById('min-label').innerText = data.min_val;
+                    
+                    // 3. Dynamically update the visual gradient strip
+                    const gradientColors = data.palette_colors.join(', ');
+                    document.getElementById('color-bar').style.background = `linear-gradient(to bottom, ${gradientColors})`;
+                })
+                .catch(err => console.error('Error fetching configuration:', err));
+        }
+
+        // NEW: Event listener to inform Python when the user selects a new option
+        document.getElementById('palette-select').addEventListener('change', function(event) {
+            const selectedPalette = event.target.value;
+
+            fetch('/select_palette', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ palette: selectedPalette })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log("Server accepted selection:", data);
+                updateColorbar(); // Immediately refresh UI styling
+            })
+            .catch(err => console.error('Error updating selection on server:', err));
+        });
+
+        // Lifecycle calls
+        updateColorbar();
+        setInterval(updateColorbar, 1000);
+    </script>
+</body>
+</html>
+"""
+
+#
+# Centralized configuration in Python
+#
+COLORBAR_CONFIG = {
+    "min_val": "0 °C",
+    "max_val": "85 °C",
+    # CSS gradient format: list of hex colors from TOP (max) to BOTTOM (min)
+    "current_palette": ["#ff0000", "#ffaa00", "#00ff00", "#00aaff", "#0000ff"],
+    "palette_colors" : [palettes],
+    "all_palettes": [palettes.keys()]
+}
+
+
+#
+# get the min/max values from the camera
+#
+def get_linear_res():
+    global tcam
+    
+    # OEM Mask 
+    #
+    COMMAND_OEM_MASK = 0x4000
+    
+    #
+    # Request the RAD T-Linear resolution (RAD 0x0EC4)
+    #    Response is 0 for 0.1 C (Low Gain), 1 for 0.01 C (High Gain)
+    # 
+    rsp = tcam.get_lep_cci(COMMAND_OEM_MASK | 0x0EC4, 2)
+    
+    #
+    # Convert the json response into an array of 2 16-bit words
+    #  Index  : Value
+    #    0    : Response[15:0]
+    #    1    : Response[31:16]
+    #
+    rsp_vals = rsp["cci_reg"]
+    dec_data = base64.b64decode(rsp_vals["data"])
+    reg_array = array('H', dec_data)
+    if reg_array[0] == 0:
+        res = 0.1
+    else:
+        res = 0.01
+
+    print(f"T-Linear resolution = {res}")
+    
+    #
+    # Request the RAD Spotmeter Value (RAD 0xED0)
+    #
+    rsp = tcam.get_lep_cci(COMMAND_OEM_MASK | 0x0ED0, 4)
+
+    #
+    # Convert the json response into an array of 4 16-bit words
+    #  Index  : Value
+    #    0    : Spotmeter Value
+    #    1    : Spotmeter Max Value
+    #    2    : Spotmeter Min Value
+    #    3    : Spotmeter Population
+    #
+    rsp_vals = rsp["cci_reg"]
+    dec_data = base64.b64decode(rsp_vals["data"])
+    reg_array = array('H', dec_data)
+    T_LINEAR_RES = res
+    
+
+#
+# Generator function that continuously reads the image file
+#
+def generate_stream():
+    global frame_image
+    
+    print("Entering generate_stream")
+    while True:
+        with frame_lock:
+            if not frame_image is None:
+                buf = io.BytesIO()
+                frame_image.save(buf, format="PNG")
+                image_bytes = buf.getvalue()
+                # Format the data as a multipart/x-mixed-replace frame
+                yield (b'--frame\r\n'
+                        b'Content-Type: image/jpg\r\n\r\n' + image_bytes + b'\r\n')
+                
+        # Adjust sleep time to control the refresh rate (e.g., 0.1s = 10 FPS)
+        time.sleep(SLEEP_TIME)
+
+#
+# Convert the raw camera data into an array of (r, g, b) values
+#
+def convert(img):
+    global IMAGE_MIN, IMAGE_MAX
+    
+    # print(f"Enetering convert - CURRENT_PALETTE={CURRENT_PALETTE}")
+    
+    dimg = base64.b64decode(img["radiometric"])
+    ra = array('H', dimg)
+
+    imgmin = 65535
+    imgmax = 0
+    for i in ra:
+        if i < imgmin:
+            imgmin = i
+        if i > imgmax:
+            imgmax = i
+    delta = imgmax - imgmin
+    a = np.zeros((120,160,3), np.uint8)
+    for r in range(0, 120):
+        for c in range(0, 160):
+            val = int((ra[(r * 160) + c] - imgmin) * 255 / delta)
+            if val > 255:
+                a[r, c] = [255, 255, 255]
+            else:
+                color = CURRENT_PALETTE[val]
+                a[r, c] = [color[0], color[1], color[2]]
+
+    # Convert the min/max Values into degrees C
+    #   Temp = ( Value / (1 / T-Linear Resolution)) - 273.15
+    IMAGE_MIN = ( imgmin / (1/T_LINEAR_RES)) - 273.15
+    IMAGE_MAX = ( imgmax / (1/T_LINEAR_RES)) - 273.15
+    # print(f"setting min/max to {IMAGE_MIN}, {IMAGE_MAX}")
+    return a
+
+#
+# Thread to:
+# 1. obtain a frame from the camera
+# 2. call convert to make an RGB array
+# 3. save the image for Flask to display
+#
+def camera_thread():
+    """Background thread that continuously reads from the camera."""
+    global frame_image, tcam, IP_ADDRESS, cam_t
+    
+    print("Entering camera_thread")
+    # Create the tCam object and connect to it    
+    tcam = TCam()
+    print(f"connecting to {IP_ADDRESS}")
+    stat = tcam.connect(IP_ADDRESS)
+
+    if stat["status"] != "connected":
+        print(f"Could not connect to {IP_ADDRESS}")
+        print(f"connect returned {stat}")
+        tcam.shutdown()
+        tcam.disconnect()
+        sys.exit(-1)
+    else:
+         get_linear_res()
+   
+
+    while(True):
+        tcam_json = None
+        try:
+            tcam_json = tcam.get_image()
+        except queue.Empty:
+            print("frameQueue is empty")
+            time.sleep(SLEEP_TIME)
+   
+        if tcam_json is None:  
+            print("frameQueue is empty")
+            time.sleep(SLEEP_TIME)
+        else:
+            with frame_lock:
+                image = convert(tcam_json)
+                frame_image = Image.fromarray(image)
+                frame_image = frame_image.rotate(180, expand=True, fillcolor=(0,0,0))
+                frame_image = frame_image.resize((frame_image.width * 4, frame_image.height * 4),
+                                                 resample=Image.Resampling.LANCZOS)
+                time.sleep(SLEEP_TIME)
+
+
+@app.route('/')
+def index():
+    print("/ called")
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/video_feed')
+def video_feed():
+    print("/video/feed called")
+    # Return a continuous response wrapper with the correct multipart headers
+    return Response(
+        generate_stream(),
+        mimetype="multipart/x-mixed-replace; boundary=frame")
+
+# DYNAMIC ENDPOINT: This generates new values on every API hit
+@app.route('/colorbar_config')
+def colorbar_config():
+    global IMAGE_MIN, IMAGE_MAX, chosen
+    
+    # print(f"Entering colorbar_config- {IMAGE_MIN}, {IMAGE_MAX}")
+    COLORBAR_CONFIG["min_val"] = f"{IMAGE_MIN:2.1f}°C"
+    COLORBAR_CONFIG["max_val"] = f"{IMAGE_MAX:2.1f}°C"
+    # Convert using list comprehension
+    # print(f"chosen palette is {chosen}")
+    rgb_list = PALETTE_DATA[chosen]
+    hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in rgb_list]
+    COLORBAR_CONFIG["current_palette"] = hex_palette
+    COLORBAR_CONFIG["palette_colors"] = hex_palette
+    COLORBAR_CONFIG["all_palettes"] = list(palettes.keys())
+    return jsonify(COLORBAR_CONFIG)
+
+
+# NEW ENDPOINT: Receives the chosen palette from the UI
+@app.route('/select_palette', methods=['POST'])
+def select_palette():
+    global CURRENT_PALETTE, chosen
+    
+    data = request.get_json()
+    chosen = data.get('palette')
+    
+    if chosen in list(palettes.keys()):
+        CURRENT_PALETTE = PALETTE_DATA[chosen]
+        print(f"Python: Palette changed to {chosen}") # Tracks it in your terminal
+        rgb_list = PALETTE_DATA[chosen]
+        hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in rgb_list]
+        COLORBAR_CONFIG["current_palette"] = hex_palette
+
+        return jsonify({"status": "success", "palette": CURRENT_PALETTE})
+    
+    
+    return jsonify({"status": "error", "message": "Invalid palette"}), 400
+
+
+########### Main Program ############
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+
+    parser.prog = "streamtest"
+    parser.description = f"{parser.prog} - an example program to stream images from tCam-mini and display as video\n"
+    parser.usage = "streamtest.py --ip=<ip address of camera>"
+    parser.add_argument("-i", "--ip", help="IP address of the camera")
+
+    args = parser.parse_args()
+
+    if not args.ip:
+        args.ip = "192.168.4.1"
+        print(f"Using default of {IP_ADDRESS}")
+    else:
+        IP_ADDRESS = args.ip
+
+        evt = Event()
+
+    
+    try:
+        # 1. Start the camera capture thread in the background
+        print("Starting camera thread")
+        cam_t = threading.Thread(target=camera_thread, daemon=True)
+        cam_t.start()
+        
+        # 2. Start Flask in the main thread
+        # Use threaded=True so Flask can handle multiple browser connections simultaneously
+        print("Start Flask in debug mode")
+        app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+
+    except KeyboardInterrupt:
+        evt.set()
+        root.destroy()
+        tcam.shutdown()
