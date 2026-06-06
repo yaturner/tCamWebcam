@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bambu Labs A1 Stream</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background: #222; color: #fff; }
+        .container { margin-top: 30px; }
+        
+        /* Controls wrapper styling */
+        .controls { margin-bottom: 20px; }
+        select { 
+            padding: 8px 12px; 
+            font-size: 14px; 
+            background: #444; 
+            color: #fff; 
+            border: 1px solid #555; 
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .stream-wrapper {
+            display: inline-flex;
+            align-items: stretch;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        img { border: 4px solid #555; border-radius: 8px; max-width: 100%; height: auto; display: block; }
+
+        .colorbar-container {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .colorbar {
+            width: 25px;
+            flex-grow: 1;
+            margin: 5px 0;
+            border: 2px solid #555;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Bambu Labs A1 Web Feed</h1>
+        
+        <div class="controls">
+            <label for="palette-select">Choose Palette: </label>
+            <select id="palette-select">
+                </select>
+        </div>
+        
+        <div class="stream-wrapper">
+            <img src="/video_feed" alt="Raspberry Pi Live Stream" />
+
+            <div class="colorbar-container">
+                <div id="min-label" class="label">--</div>
+                <div id="color-bar" class="colorbar"></div>
+                <div id="max-label" class="label">--</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let dropdownPopulated = false;
+
+        function updateColorbar() {
+            fetch('/colorbar_config')
+                .then(response => response.json())
+                .then(data => {
+                    // 1. Populate the dropdown menu options once
+                    if (!dropdownPopulated) {
+                        const selectEl = document.getElementById('palette-select');
+                        data.all_palettes.forEach(name => {
+                            let option = document.createElement('option');
+                            option.value = name;
+                            option.innerText = name;
+                            if (name === data.current_palette) option.selected = true;
+                            selectEl.appendChild(option);
+                        });
+                        dropdownPopulated = true;
+                    }
+
+                    // 2. Dynamically update text labels
+                    document.getElementById('max-label').innerText = data.max_val;
+                    document.getElementById('min-label').innerText = data.min_val;
+                    
+                    // 3. Dynamically update the visual gradient strip
+                    const gradientColors = data.palette_colors.join(', ');
+                    document.getElementById('color-bar').style.background = `linear-gradient(to bottom, ${gradientColors})`;
+                })
+                .catch(err => console.error('Error fetching configuration:', err));
+        }
+
+        // NEW: Event listener to inform Python when the user selects a new option
+        document.getElementById('palette-select').addEventListener('change', function(event) {
+            const selectedPalette = event.target.value;
+
+            fetch('/select_palette', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ palette: selectedPalette })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log("Server accepted selection:", data);
+                updateColorbar(); // Immediately refresh UI styling
+            })
+            .catch(err => console.error('Error updating selection on server:', err));
+        });
+
+        // Lifecycle calls
+        updateColorbar();
+        setInterval(updateColorbar, 1000);
+    </script>
+</body>
+</html>

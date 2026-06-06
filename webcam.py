@@ -49,7 +49,7 @@ tcam = None
 CURRENT_PALETTE = double_rainbow.double_rainbow_palette
 IMAGE_PATH="./thermalImage.jpg"
 IP_ADDRESS = "192.168.4.1"
-ROTATE_IMAGE=0
+ROTATE_IMAGE = 0
 SLEEP_TIME = 0
 IMAGE_MIN = 0.0
 IMAGE_MAX = 0.0
@@ -70,134 +70,10 @@ PALETTE_DATA = {
     "rainbow":rainbow.rainbow_palette,
     "wheel2":wheel2.wheel2_palette
 }
-chosen = "double_rainbow" # initial palette chose
 
-
-# Frontend HTML Framework
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Bambu Labs A1 tream</title>
-    <style>
-        body { font-family: Arial, sans-serif; text-align: center; background: #222; color: #fff; }
-        .container { margin-top: 30px; }
-        
-        /* Controls wrapper styling */
-        .controls { margin-bottom: 20px; }
-        select { 
-            padding: 8px 12px; 
-            font-size: 14px; 
-            background: #444; 
-            color: #fff; 
-            border: 1px solid #555; 
-            border-radius: 4px;
-            cursor: pointer;
-        }
-
-        .stream-wrapper {
-            display: inline-flex;
-            align-items: stretch;
-            justify-content: center;
-            gap: 15px;
-        }
-
-        img { border: 4px solid #555; border-radius: 8px; max-width: 100%; height: auto; display: block; }
-
-        .colorbar-container {
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-            align-items: center;
-            font-weight: bold;
-            font-size: 14px;
-        }
-
-        .colorbar {
-            width: 25px;
-            flex-grow: 1;
-            margin: 5px 0;
-            border: 2px solid #555;
-            border-radius: 4px;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Bambu Labs A1 Web Feed</h1>
-        
-        <div class="controls">
-            <label for="palette-select">Choose Palette: </label>
-            <select id="palette-select">
-                </select>
-        </div>
-        
-        <div class="stream-wrapper">
-            <img src="/video_feed" alt="Raspberry Pi Live Stream" />
-
-            <div class="colorbar-container">
-                <div id="min-label" class="label">--</div>
-                <div id="color-bar" class="colorbar"></div>
-                <div id="max-label" class="label">--</div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        let dropdownPopulated = false;
-
-        function updateColorbar() {
-            fetch('/colorbar_config')
-                .then(response => response.json())
-                .then(data => {
-                    // 1. Populate the dropdown menu options once
-                    if (!dropdownPopulated) {
-                        const selectEl = document.getElementById('palette-select');
-                        data.all_palettes.forEach(name => {
-                            let option = document.createElement('option');
-                            option.value = name;
-                            option.innerText = name;
-                            if (name === data.current_palette) option.selected = true;
-                            selectEl.appendChild(option);
-                        });
-                        dropdownPopulated = true;
-                    }
-
-                    // 2. Dynamically update text labels
-                    document.getElementById('max-label').innerText = data.max_val;
-                    document.getElementById('min-label').innerText = data.min_val;
-                    
-                    // 3. Dynamically update the visual gradient strip
-                    const gradientColors = data.palette_colors.join(', ');
-                    document.getElementById('color-bar').style.background = `linear-gradient(to bottom, ${gradientColors})`;
-                })
-                .catch(err => console.error('Error fetching configuration:', err));
-        }
-
-        // NEW: Event listener to inform Python when the user selects a new option
-        document.getElementById('palette-select').addEventListener('change', function(event) {
-            const selectedPalette = event.target.value;
-
-            fetch('/select_palette', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ palette: selectedPalette })
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log("Server accepted selection:", data);
-                updateColorbar(); // Immediately refresh UI styling
-            })
-            .catch(err => console.error('Error updating selection on server:', err));
-        });
-
-        // Lifecycle calls
-        updateColorbar();
-        setInterval(updateColorbar, 1000);
-    </script>
-</body>
-</html>
-"""
+chosen = "black_hot" # initial palette - matches spinner
+# Frontend HTML Framework, read from disk
+HTML_TEMPLATE = ""
 
 #
 # Centralized configuration in Python
@@ -224,7 +100,20 @@ def load_config(config_path="config.json"):
             print(f"Warning: Failed to parse {config_path}: {e}")
     return {}
 
+#
+# read html template from a file if present
+#
+def load_template(html_path="template.html"):
+    """Loads template from a file if it exists."""
+    if os.path.exists(html_path):
+        try:
+            with open(html_path, "r") as f:
+                return f.read()
+        except Exception as e:
+            print(f"Warning: Failed to load {html_path}: {e}")
+            os._exit()
 
+            
 #
 # get the min/max values from the camera
 #
@@ -305,8 +194,7 @@ def convert(img):
     # print(f"Enetering convert - CURRENT_PALETTE={CURRENT_PALETTE}")
     
     dimg = base64.b64decode(img["radiometric"])
-    ra = array('H', dimg)
-    nra = np.array(ra)
+    nra = np.array(array('H', dimg), dtype=np.uint16)
     
     imgmin = nra.min()
     imgmax = nra.max()
@@ -337,7 +225,7 @@ def convert(img):
 #
 def camera_thread():
     """Background thread that continuously reads from the camera."""
-    global frame_image, tcam, IP_ADDRESS, ROTATION, cam_t
+    global frame_image, tcam, IP_ADDRESS, ROTATE_IMAGE, cam_t
     
     print("Entering camera_thread")
     # Create the tCam object and connect to it    
@@ -371,11 +259,22 @@ def camera_thread():
                 image = convert(tcam_json)
                 rgb_array = np.array(image, dtype=np.uint8)
                 rgb_grid = rgb_array.reshape(120, 160,3)
+                # 1. Rotate instantly in NumPy space before making a PIL image
+                # k=1 is 90°, k=2 is 180°, k=3 is 270°. (Pass axes=(0,1) for counter-clockwise)
+#                if ROTATE_IMAGE == 90:
+#                    rgb_grid = np.rot90(rgb_grid, k=3) 
+#                elif ROTATE_IMAGE == 180:
+#                 rgb_grid = np.rot90(rgb_grid, k=2)
+#                elif ROTATE_IMAGE == 270:
+#                    rgb_grid = np.rot90(rgb_grid, k=1)
+                    
+                # 2. Build the image directly from the pre-rotated NumPy matrix
                 frame_image = Image.fromarray(rgb_grid, mode='RGB')
-                frame_image = frame_image.rotate(ROTATE_IMAGE, expand=True, fillcolor=(0,0,0))
-                frame_image = frame_image.resize((frame_image.width * 4, frame_image.height * 4),
-                                                 resample=Image.Resampling.LANCZOS)
-                time.sleep(SLEEP_TIME)
+                    
+                # 3. Scale using NEAREST or BOX (Dramatically faster than LANCZOS)
+                # It completely drops processing time and keeps thermal pixel values intact
+                new_size = (frame_image.width * 4, frame_image.height * 4)
+                frame_image = frame_image.resize(new_size, resample=Image.Resampling.NEAREST)
 
 
 @app.route('/')
@@ -401,8 +300,8 @@ def colorbar_config():
     COLORBAR_CONFIG["max_val"] = f"{IMAGE_MAX:2.1f}°C"
     # Convert using list comprehension
     # print(f"chosen palette is {chosen}")
-    rgb_list = PALETTE_DATA[chosen]
-    hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in rgb_list]
+    # rgb_list = PALETTE_DATA[chosen]
+    hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in PALETTE_DATA[chosen]]
     COLORBAR_CONFIG["current_palette"] = hex_palette
     COLORBAR_CONFIG["palette_colors"] = hex_palette
     COLORBAR_CONFIG["all_palettes"] = list(palettes.keys())
@@ -420,8 +319,8 @@ def select_palette():
     if chosen in list(palettes.keys()):
         CURRENT_PALETTE = PALETTE_DATA[chosen]
         print(f"Python: Palette changed to {chosen}") # Tracks it in your terminal
-        rgb_list = PALETTE_DATA[chosen]
-        hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in rgb_list]
+        # rgb_list = PALETTE_DATA[chosen]
+        hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in PALETTE_DATA[chosen]]
         COLORBAR_CONFIG["current_palette"] = hex_palette
 
         return jsonify({"status": "success", "palette": CURRENT_PALETTE})
@@ -433,6 +332,10 @@ def select_palette():
 ########### Main Program ############
 
 if __name__ == '__main__':
+
+    # read the template html
+    HTML_TEMPLATE = load_template()
+    
     parser = argparse.ArgumentParser()
 
     parser.prog = "webcam"
@@ -443,7 +346,7 @@ if __name__ == '__main__':
     
     # 2. Get the IP from config if available, otherwise set a default fallback
     default_ip = config.get("ip", "192.168.4.1")
-    ROTATION = config.get("rotate_image", 0)
+    ROTATE_IMAGE = config.get("rotate_image", 0)
     chosen="rainbow"
     
     # Passing default_ip here allows CLI args to override the JSON file if explicitly provided
