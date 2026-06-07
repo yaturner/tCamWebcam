@@ -67,56 +67,53 @@
     </div>
 
     <script>
-        let dropdownPopulated = false;
+let dropdownPopulated = false;
 
-        function updateColorbar() {
-            fetch('/colorbar_config')
-                .then(response => response.json())
-                .then(data => {
-                    // 1. Populate the dropdown menu options once
-                    if (!dropdownPopulated) {
-                        const selectEl = document.getElementById('palette-select');
-                        data.all_palettes.forEach(name => {
-                            let option = document.createElement('option');
-                            option.value = name;
-                            option.innerText = name;
-                            if (name === data.current_palette) option.selected = true;
-                            selectEl.appendChild(option);
-                        });
-                        dropdownPopulated = true;
-                    }
+function updateColorbar() {
+    fetch('/colorbar_config')
+        .then(response => {
+            if (!response.ok) throw new Error("Server went down");
+            return response.json();
+        })
+        .then(data => {
+            const selectEl = document.getElementById('palette-select');
+            
+            // 🚀 FIX 1: If the server restarted, clear and rebuild options dynamically
+            if (!dropdownPopulated || selectEl.children.length === 0) {
+                selectEl.innerHTML = ""; // Wipe old stale options
+                data.all_palettes.forEach(name => {
+                    let option = document.createElement('option');
+                    option.value = name;
+                    option.innerText = name;
+                    if (name === data.current_palette) option.selected = true;
+                    selectEl.appendChild(option);
+                });
+                dropdownPopulated = true;
+            }
 
-                    // 2. Dynamically update text labels
-                    document.getElementById('max-label').innerText = data.max_val;
-                    document.getElementById('min-label').innerText = data.min_val;
-                    
-                    // 3. Dynamically update the visual gradient strip
-                    const gradientColors = data.palette_colors.join(', ');
-                    document.getElementById('color-bar').style.background = `linear-gradient(to bottom, ${gradientColors})`;
-                })
-                .catch(err => console.error('Error fetching configuration:', err));
-        }
-
-        // NEW: Event listener to inform Python when the user selects a new option
-        document.getElementById('palette-select').addEventListener('change', function(event) {
-            const selectedPalette = event.target.value;
-
-            fetch('/select_palette', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ palette: selectedPalette })
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log("Server accepted selection:", data);
-                updateColorbar(); // Immediately refresh UI styling
-            })
-            .catch(err => console.error('Error updating selection on server:', err));
+            // Update text labels and gradient strip smoothly
+            document.getElementById('max-label').innerText = data.max_val;
+            document.getElementById('min-label').innerText = data.min_val;
+            const gradientColors = data.palette_colors.join(', ');
+            document.getElementById('color-bar').style.background = `linear-gradient(to bottom, ${gradientColors})`;
+        })
+        .catch(err => {
+            console.warn('Lost connection to webcam.py. Retrying...');
+            
+            // 🚀 FIX 2: If server dies, reset memory flags so it rebuilds properly on wake
+            dropdownPopulated = false; 
+            
+            // Force the broken video element to re-hook its stream source when server wakes up
+            const img = document.getElementById('stream-img');
+            if (img) {
+                // Appending a random timestamp parameter trick forces the browser to reconnect
+                img.src = "/video_feed?t=" + new Date().getTime();
+            }
         });
+}
 
-        // Lifecycle calls
-        updateColorbar();
-        setInterval(updateColorbar, 1000);
+// Keep the lifecycle loop active so it self-heals the moment python comes back online
+setInterval(updateColorbar, 2000);
     </script>
 </body>
 </html>

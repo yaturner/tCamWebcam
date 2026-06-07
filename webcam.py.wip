@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 '''
-webcam demonstrates streaming the frames from a tCam-Mini
-to a web page in real time.
+webcam is a python script to demonstrate streaming the frames from a tCam-Mini
+to a web page.
 
 author: bitreaper
 author: AhJim
@@ -46,12 +46,11 @@ app = Flask(__name__)
 frame_image = None
 frame_lock = threading.Lock()
 tcam = None
-DEBUG_ENABLED = False
 CURRENT_PALETTE = black_hot.black_hot_palette
 IMAGE_PATH="./thermalImage.jpg"
 IP_ADDRESS = "192.168.4.1"
-ROTATE_IMAGE = 0
-SLEEP_TIME = 0.3
+ROTATE_IMAGE=0
+SLEEP_TIME = 0
 IMAGE_MIN = 0.0
 IMAGE_MAX = 0.0
 T_LINEAR_RES = 0.01
@@ -71,10 +70,12 @@ PALETTE_DATA = {
     "rainbow":rainbow.rainbow_palette,
     "wheel2":wheel2.wheel2_palette
 }
-
 chosen = "black_hot" # initial palette - matches spinner
 # Frontend HTML Framework, read from disk
 HTML_TEMPLATE = ""
+# Global variables shared between the camera thread and the Flask server
+LATEST_RESPONSE = b''
+TCAM_PORT = 5001         # Standard tCam-Mini data port
 
 #
 # Centralized configuration in Python
@@ -82,11 +83,87 @@ HTML_TEMPLATE = ""
 COLORBAR_CONFIG = {
     "min_val": "0 °C",
     "max_val": "85 °C",
-    # CSS gradient format: list of hex colors from TOP (max) to BOTTOM (min)
-    "current_palette": ["#ff0000", "#ffaa00", "#00ff00", "#00aaff", "#0000ff"],
+    # CSS gradient format: list of hex colors from TOP (min) to BOTTOM (max)
+    "current_palette": [],
     "palette_colors" : [palettes],
     "all_palettes": [palettes.keys()]
 }
+
+import io
+import time
+import socket
+import threading
+import numpy as np
+from PIL import Image
+from flask import Flask, Response, render_template
+
+app = Flask(__name__)
+
+
+
+
+#
+# tcam_socket_worker
+#
+def tcam_socket_worker():
+    """
+    BACKGROUND THREAD: This loop runs completely independent of web traffic.
+    It owns the socket connection, pulls raw data, and updates the global frame.
+    """
+    global LATEST_FRAME_BYTES
+    
+    print("Connecting to tCam-Mini...")
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    
+    # 🚀 SPEED OPTIMIZATION: Disable Nagle's algorithm for instant packet delivery
+    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    
+    try:
+        breakpoint()
+        client_socket.connect((IP_ADDRESS, TCAM_PORT))
+        print("Connected successfully!")
+        
+        # Tell the tCam to start streaming (adjust command based on tCam API specs)
+        client_socket.sendall(b'\x02{"cmd":"stream_on","args":{"delay_msec":250, "num_frames":0}}\x03') 
+        
+        while True:
+            # 1. Read raw binary/JSON data from the large socket buffer
+            # 65536 bytes handles bursts of data easily
+            raw_packet = client_socket.recv(65536)
+            if not raw_packet:
+                break # Connection dropped
+                
+            # --- YOUR PROCESSING PIPELINE HERE ---
+            # 2. Parse the packet (using orjson or ujson)
+            convert(raw_packet)
+            rgb_array = np.array(image, dtype=np.uint8)
+            rgb_grid = rgb_array.reshape(120, 160,3)
+            frame_image = Image.fromarray(rgb_grid, mode='RGB')
+            frame_image = frame_image.rotate(ROTATE_IMAGE, expand=True, fillcolor=(0,0,0))
+            frame_image = frame_image.resize((frame_image.width * 4, frame_image.height * 4),
+                                             resample=Image.Resampling.LANCZOS)
+
+            # 3. Find min/max using .min() and .max()
+            # 4. Reshape into (120, 160, 3) 
+            # Simulated dummy PIL rendering for illustration:
+            # img = Image.new('RGB', (160, 120), color=(255, 0, 0))
+            
+            # 5. Convert final PIL image to compressed JPEG bytes
+            buffer = io.BytesIO()
+            frame_image.save(buffer, format='JPEG')
+            
+            # 6. Overwrite the global variable with the newest frame
+            LATEST_FRAME_BYTES = buffer.getvalue()
+            
+            # Control thread execution rate (e.g., matching tCam's 9Hz or 14Hz)
+            time.sleep(0.05)
+
+    except Exception as e:
+        print(f"Socket Error: {e}")
+    finally:
+        client_socket.close()
+        print("Socket closed.")
+
 
 #
 # read config from a file if present
@@ -116,7 +193,7 @@ def load_template(html_path="template.html"):
 
             
 #
-# get the min/max values from the camera
+# get the get linear resolution from the camera
 #
 def get_linear_res():
     global tcam
@@ -145,8 +222,7 @@ def get_linear_res():
     else:
         res = 0.01
 
-    if DEBUG_ENABLED:
-        print(f"T-Linear resolution = {res}")
+    print(f"T-Linear resolution = {res}")
     
     #
     # Request the RAD Spotmeter Value (RAD 0xED0)
@@ -173,8 +249,7 @@ def get_linear_res():
 def generate_stream():
     global frame_image
     
-    if DEBUG_ENABLED:
-        print(f"Entering generate_stream")
+    print("Entering generate_stream")
     while True:
         with frame_lock:
             if not frame_image is None:
@@ -193,12 +268,12 @@ def generate_stream():
 #
 def convert(img):
     global IMAGE_MIN, IMAGE_MAX
-
-    if DEBUG_ENABLED:
-        print(f"Enetering convert - CURRENT_PALETTE={CURRENT_PALETTE}")
     
+    # print(f"Enetering convert - CURRENT_PALETTE={CURRENT_PALETTE}")
+    breakpoint()
     dimg = base64.b64decode(img["radiometric"])
-    nra = np.array(array('H', dimg), dtype=np.uint16)
+    ra = array('H', dimg)
+    nra = np.array(ra)
     
     imgmin = nra.min()
     imgmax = nra.max()
@@ -206,7 +281,7 @@ def convert(img):
 
     # Create an array of your chosen colors (e.g., 256 colors mapped out)
     palette_lut = np.array(CURRENT_PALETTE, dtype=np.uint8)
-    # breakpoint()
+    breakpoint()
     # Normalize your raw radiometric values directly into indices [0-255] 
     # instead of looping through each pixel.
     normalized_frame = (((nra - imgmin) / delta * 255)).astype(np.uint8)
@@ -218,8 +293,7 @@ def convert(img):
     #   Temp = ( Value / (1 / T-Linear Resolution)) - 273.15
     IMAGE_MIN = ( imgmin / (1/T_LINEAR_RES)) - 273.15
     IMAGE_MAX = ( imgmax / (1/T_LINEAR_RES)) - 273.15
-    if DEBUG_ENABLED:
-        print(f"setting min/max to {IMAGE_MIN}, {IMAGE_MAX}")
+    # print(f"setting min/max to {IMAGE_MIN}, {IMAGE_MAX}")
     return rgb_image_array
 
 #
@@ -230,14 +304,12 @@ def convert(img):
 #
 def camera_thread():
     """Background thread that continuously reads from the camera."""
-    global frame_image, tcam, IP_ADDRESS, ROTATE_IMAGE, cam_t
-
-    if DEBUG_ENABLED:
-        print("Entering camera_thread")
+    global frame_image, tcam, IP_ADDRESS, ROTATION, cam_t
+    
+    print("Entering camera_thread")
     # Create the tCam object and connect to it    
     tcam = TCam()
-    if DEBUG_ENABLED:
-        print(f"connecting to {IP_ADDRESS}")
+    print(f"connecting to {IP_ADDRESS}")
     stat = tcam.connect(IP_ADDRESS)
 
     if stat["status"] != "connected":
@@ -248,66 +320,50 @@ def camera_thread():
         os._exit()
     else:
          get_linear_res()
-         ret = tcam.start_stream(delay_msec=0, num_frames=0)
-         if DEBUG_ENABLED:
-             print(f"Return from start_stream is '{ret}'")
-         
+   
+
     while(True):
         tcam_json = None
         try:
-            tcam_json = tcam.get_frame()
-            # tcam_json = tcam.get_image()
-            if tcam.frameQueue.empty():
-                time.sleep(SLEEP_TIME)
-                pass
+            tcam_json = tcam.get_image()
         except queue.Empty:
-            if DEBUG_ENABLED:
-                print("frameQueue is empty")
+            print("frameQueue is empty")
             time.sleep(SLEEP_TIME)
-            pass
-        
-        # breakpoint()
-        if not tcam_json:  
-            if DEBUG_ENABLED:
-                print(f"empty response from camera {tcam_json}")
+   
+        if tcam_json is None:  
+            print("frameQueue is empty")
             time.sleep(SLEEP_TIME)
-            pass
         else:
             with frame_lock:
                 image = convert(tcam_json)
                 rgb_array = np.array(image, dtype=np.uint8)
                 rgb_grid = rgb_array.reshape(120, 160,3)
-                # 1. Rotate instantly in NumPy space before making a PIL image
-                # k=1 is 90°, k=2 is 180°, k=3 is 270°. (Pass axes=(0,1) for counter-clockwise)
-                if ROTATE_IMAGE == 90:
-                    rgb_grid = np.rot90(rgb_grid, k=3) 
-                elif ROTATE_IMAGE == 180:
-                 rgb_grid = np.rot90(rgb_grid, k=2)
-                elif ROTATE_IMAGE == 270:
-                    rgb_grid = np.rot90(rgb_grid, k=1)
-                    
-                # 2. Build the image directly from the pre-rotated NumPy matrix
                 frame_image = Image.fromarray(rgb_grid, mode='RGB')
-                    
-                # 3. Scale using NEAREST or BOX (Dramatically faster than LANCZOS)
-                # It completely drops processing time and keeps thermal pixel values intact
-                new_size = (frame_image.width * 4, frame_image.height * 4)
-                frame_image = frame_image.resize(new_size, resample=Image.Resampling.NEAREST)
+                frame_image = frame_image.rotate(ROTATE_IMAGE, expand=True, fillcolor=(0,0,0))
+                frame_image = frame_image.resize((frame_image.width * 4, frame_image.height * 4),
+                                                 resample=Image.Resampling.LANCZOS)
+                time.sleep(SLEEP_TIME)
 
 
 @app.route('/')
 def index():
-    if DEBUG_ENABLED:
-        print("/ called")
+    print("/ called")
     return render_template_string(HTML_TEMPLATE)
 
+def generate_tcam_stream():
+    """Loops continuously, serving whatever image is sitting in global memory."""
+    while True:
+        if LATEST_FRAME_BYTES:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + LATEST_FRAME_BYTES + b'\r\n')
+        time.sleep(0.05) # Keeps the CPU from running at 100%
+        
 @app.route('/video_feed')
 def video_feed():
-    if DEBUG_ENABLED:
-        print("/video/feed called")
+    print("/video/feed called")
     # Return a continuous response wrapper with the correct multipart headers
     return Response(
-        generate_stream(),
+        generate_tcam_stream(),
         mimetype="multipart/x-mixed-replace; boundary=frame")
 
 # DYNAMIC ENDPOINT: This generates new values on every API hit
@@ -315,14 +371,11 @@ def video_feed():
 def colorbar_config():
     global IMAGE_MIN, IMAGE_MAX, chosen
     
-    if DEBUG_ENABLED:
-        print(f"Entering colorbar_config- {IMAGE_MIN}, {IMAGE_MAX}")
     COLORBAR_CONFIG["min_val"] = f"{IMAGE_MIN:2.1f}°C"
     COLORBAR_CONFIG["max_val"] = f"{IMAGE_MAX:2.1f}°C"
     # Convert using list comprehension
-    if DEBUG_ENABLED:
-        print(f"chosen palette is {chosen}")
-    hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in PALETTE_DATA[chosen]]
+    rgb_list = PALETTE_DATA[chosen]
+    hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in rgb_list]
     COLORBAR_CONFIG["current_palette"] = hex_palette
     COLORBAR_CONFIG["palette_colors"] = hex_palette
     COLORBAR_CONFIG["all_palettes"] = list(palettes.keys())
@@ -339,9 +392,9 @@ def select_palette():
     
     if chosen in list(palettes.keys()):
         CURRENT_PALETTE = PALETTE_DATA[chosen]
-        if DEBUG_ENABLED:
-            print(f"Python: Palette changed to {chosen}") # Tracks it in your terminal
-        hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in PALETTE_DATA[chosen]]
+        print(f"Python: Palette changed to {chosen}") # Tracks it in your terminal
+        rgb_list = PALETTE_DATA[chosen]
+        hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in rgb_list]
         COLORBAR_CONFIG["current_palette"] = hex_palette
 
         return jsonify({"status": "success", "palette": CURRENT_PALETTE})
@@ -349,27 +402,27 @@ def select_palette():
     
     return jsonify({"status": "error", "message": "Invalid palette"}), 400
 
-
+#
 ########### Main Program ############
-
+#
 if __name__ == '__main__':
 
     # read the template html
     HTML_TEMPLATE = load_template()
-    
+        
     parser = argparse.ArgumentParser()
 
     parser.prog = "webcam"
     parser.description = f"{parser.prog} - a program to stream images from tCam-mini and display on a web page\n"
 
+    
     # 1. Load configuration from file first
     config = load_config("config.json")
     
     # 2. Get the IP from config if available, otherwise set a default fallback
     default_ip = config.get("ip", "192.168.4.1")
-    ROTATE_IMAGE = config.get("rotate_image", 0)
-    chosen = config.get("palette", "rainbow")
-    DEBUG_ENABLED = config.get("debug_enabled", False)
+    ROTATION = config.get("rotate_image", 0)
+    chosen="black_hot"
     
     # Passing default_ip here allows CLI args to override the JSON file if explicitly provided
     parser.add_argument(
@@ -392,52 +445,28 @@ if __name__ == '__main__':
         help="Image Rotation in degrees"
     )
 
-    parser.add_argument(
-        "--debug_enabled", 
-        type=bool, 
-        default=DEBUG_ENABLED,
-        help="Enable debug messages"
-    )
-
 
     args = parser.parse_args()
-  
+
+    
     if not args.ip:
         args.ip = "192.168.4.1"
-        if DEBUG_ENABLED:
-            print(f"Using default of {IP_ADDRESS}")
+        print(f"Using default of {IP_ADDRESS}")
     else:
         IP_ADDRESS = args.ip
 
-    if args.rotate_image:
-        if not args.rotate_image not in [0, 90, 180, 270]:
-            print(f"invalid value '{args.rotate}' for image roation")
-        else:
-            ROTATE_IMAGE=args.rotate_image
-
-    if args.palette:
-        if args.palette not in PALETTE_DATA.keys():
-            print(f"Unknown palette - {args.palette}")
-        else:
-            chosen = args.palette
-
-    if args.debug_enabled:
-        DEBUG_ENABLED = args.debug_enabled
-
     evt = Event()
-
+    
     try:
         # 1. Start the camera capture thread in the background
-        if DEBUG_ENABLED:
-            print("Starting camera thread")
-        cam_t = threading.Thread(target=camera_thread, daemon=True)
+        print("Starting camera thread")
+        cam_t = threading.Thread(target=tcam_socket_worker, daemon=True)
         cam_t.start()
         
         # 2. Start Flask in the main thread
         # Use threaded=True so Flask can handle multiple browser connections simultaneously
-        if DEBUG_ENABLED:
-            print("Start Flask in debug mode")
-        app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+        print("Start Flask in debug mode")
+        app.run(host='0.0.0.0', port=5000, debug=False, threaded=True, use_reloader=False)
         
     except KeyboardInterrupt:
         evt.set()
