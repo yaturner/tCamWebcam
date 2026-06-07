@@ -7,7 +7,8 @@
 
 This allows you to seamlessly integrate your thermal camera feed into any web browser. For example this can be used to monitor your 3D printer to verify print bed and nozzle temperatures during printing
 
-![](Screenshot.png)
+<img width="1266" height="1037" alt="image" src="https://github.com/user-attachments/assets/a38100c1-a6bd-49fa-a55d-f1ef0363529b" />
+
 
 ## Features
 
