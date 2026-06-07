@@ -279,12 +279,12 @@ def camera_thread():
                 rgb_grid = rgb_array.reshape(120, 160,3)
                 # 1. Rotate instantly in NumPy space before making a PIL image
                 # k=1 is 90°, k=2 is 180°, k=3 is 270°. (Pass axes=(0,1) for counter-clockwise)
-#                if ROTATE_IMAGE == 90:
-#                    rgb_grid = np.rot90(rgb_grid, k=3) 
-#                elif ROTATE_IMAGE == 180:
-#                 rgb_grid = np.rot90(rgb_grid, k=2)
-#                elif ROTATE_IMAGE == 270:
-#                    rgb_grid = np.rot90(rgb_grid, k=1)
+                if ROTATE_IMAGE == 90:
+                    rgb_grid = np.rot90(rgb_grid, k=3) 
+                elif ROTATE_IMAGE == 180:
+                 rgb_grid = np.rot90(rgb_grid, k=2)
+                elif ROTATE_IMAGE == 270:
+                    rgb_grid = np.rot90(rgb_grid, k=1)
                     
                 # 2. Build the image directly from the pre-rotated NumPy matrix
                 frame_image = Image.fromarray(rgb_grid, mode='RGB')
