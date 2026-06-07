@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 '''
-Streamtest is a simple utility to demonstrate streaming the frames from a tCam-Mini
-to a canvas in real time.
+webcam demonstrates streaming the frames from a tCam-Mini
+to a web page in real time.
 
 author: bitreaper
 author: AhJim
@@ -46,11 +46,12 @@ app = Flask(__name__)
 frame_image = None
 frame_lock = threading.Lock()
 tcam = None
-CURRENT_PALETTE = double_rainbow.double_rainbow_palette
+DEBUG_ENABLED = False
+CURRENT_PALETTE = black_hot.black_hot_palette
 IMAGE_PATH="./thermalImage.jpg"
 IP_ADDRESS = "192.168.4.1"
 ROTATE_IMAGE = 0
-SLEEP_TIME = 0
+SLEEP_TIME = 0.3
 IMAGE_MIN = 0.0
 IMAGE_MAX = 0.0
 T_LINEAR_RES = 0.01
@@ -144,7 +145,8 @@ def get_linear_res():
     else:
         res = 0.01
 
-    print(f"T-Linear resolution = {res}")
+    if DEBUG_ENABLED:
+        print(f"T-Linear resolution = {res}")
     
     #
     # Request the RAD Spotmeter Value (RAD 0xED0)
@@ -171,7 +173,8 @@ def get_linear_res():
 def generate_stream():
     global frame_image
     
-    print("Entering generate_stream")
+    if DEBUG_ENABLED:
+        print(f"Entering generate_stream")
     while True:
         with frame_lock:
             if not frame_image is None:
@@ -190,8 +193,9 @@ def generate_stream():
 #
 def convert(img):
     global IMAGE_MIN, IMAGE_MAX
-    
-    # print(f"Enetering convert - CURRENT_PALETTE={CURRENT_PALETTE}")
+
+    if DEBUG_ENABLED:
+        print(f"Enetering convert - CURRENT_PALETTE={CURRENT_PALETTE}")
     
     dimg = base64.b64decode(img["radiometric"])
     nra = np.array(array('H', dimg), dtype=np.uint16)
@@ -214,7 +218,8 @@ def convert(img):
     #   Temp = ( Value / (1 / T-Linear Resolution)) - 273.15
     IMAGE_MIN = ( imgmin / (1/T_LINEAR_RES)) - 273.15
     IMAGE_MAX = ( imgmax / (1/T_LINEAR_RES)) - 273.15
-    # print(f"setting min/max to {IMAGE_MIN}, {IMAGE_MAX}")
+    if DEBUG_ENABLED:
+        print(f"setting min/max to {IMAGE_MIN}, {IMAGE_MAX}")
     return rgb_image_array
 
 #
@@ -226,11 +231,13 @@ def convert(img):
 def camera_thread():
     """Background thread that continuously reads from the camera."""
     global frame_image, tcam, IP_ADDRESS, ROTATE_IMAGE, cam_t
-    
-    print("Entering camera_thread")
+
+    if DEBUG_ENABLED:
+        print("Entering camera_thread")
     # Create the tCam object and connect to it    
     tcam = TCam()
-    print(f"connecting to {IP_ADDRESS}")
+    if DEBUG_ENABLED:
+        print(f"connecting to {IP_ADDRESS}")
     stat = tcam.connect(IP_ADDRESS)
 
     if stat["status"] != "connected":
@@ -241,19 +248,30 @@ def camera_thread():
         os._exit()
     else:
          get_linear_res()
-   
-
+         ret = tcam.start_stream(delay_msec=0, num_frames=0)
+         if DEBUG_ENABLED:
+             print(f"Return from start_stream is '{ret}'")
+         
     while(True):
         tcam_json = None
         try:
-            tcam_json = tcam.get_image()
+            tcam_json = tcam.get_frame()
+            # tcam_json = tcam.get_image()
+            if tcam.frameQueue.empty():
+                time.sleep(SLEEP_TIME)
+                pass
         except queue.Empty:
-            print("frameQueue is empty")
+            if DEBUG_ENABLED:
+                print("frameQueue is empty")
             time.sleep(SLEEP_TIME)
-   
-        if tcam_json is None:  
-            print("frameQueue is empty")
+            pass
+        
+        # breakpoint()
+        if not tcam_json:  
+            if DEBUG_ENABLED:
+                print(f"empty response from camera {tcam_json}")
             time.sleep(SLEEP_TIME)
+            pass
         else:
             with frame_lock:
                 image = convert(tcam_json)
@@ -279,12 +297,14 @@ def camera_thread():
 
 @app.route('/')
 def index():
-    print("/ called")
+    if DEBUG_ENABLED:
+        print("/ called")
     return render_template_string(HTML_TEMPLATE)
 
 @app.route('/video_feed')
 def video_feed():
-    print("/video/feed called")
+    if DEBUG_ENABLED:
+        print("/video/feed called")
     # Return a continuous response wrapper with the correct multipart headers
     return Response(
         generate_stream(),
@@ -295,12 +315,13 @@ def video_feed():
 def colorbar_config():
     global IMAGE_MIN, IMAGE_MAX, chosen
     
-    # print(f"Entering colorbar_config- {IMAGE_MIN}, {IMAGE_MAX}")
+    if DEBUG_ENABLED:
+        print(f"Entering colorbar_config- {IMAGE_MIN}, {IMAGE_MAX}")
     COLORBAR_CONFIG["min_val"] = f"{IMAGE_MIN:2.1f}°C"
     COLORBAR_CONFIG["max_val"] = f"{IMAGE_MAX:2.1f}°C"
     # Convert using list comprehension
-    # print(f"chosen palette is {chosen}")
-    # rgb_list = PALETTE_DATA[chosen]
+    if DEBUG_ENABLED:
+        print(f"chosen palette is {chosen}")
     hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in PALETTE_DATA[chosen]]
     COLORBAR_CONFIG["current_palette"] = hex_palette
     COLORBAR_CONFIG["palette_colors"] = hex_palette
@@ -318,8 +339,8 @@ def select_palette():
     
     if chosen in list(palettes.keys()):
         CURRENT_PALETTE = PALETTE_DATA[chosen]
-        print(f"Python: Palette changed to {chosen}") # Tracks it in your terminal
-        # rgb_list = PALETTE_DATA[chosen]
+        if DEBUG_ENABLED:
+            print(f"Python: Palette changed to {chosen}") # Tracks it in your terminal
         hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in PALETTE_DATA[chosen]]
         COLORBAR_CONFIG["current_palette"] = hex_palette
 
@@ -376,7 +397,8 @@ if __name__ == '__main__':
     
     if not args.ip:
         args.ip = "192.168.4.1"
-        print(f"Using default of {IP_ADDRESS}")
+        if DEBUG_ENABLED:
+            print(f"Using default of {IP_ADDRESS}")
     else:
         IP_ADDRESS = args.ip
 
@@ -384,14 +406,16 @@ if __name__ == '__main__':
 
     try:
         # 1. Start the camera capture thread in the background
-        print("Starting camera thread")
+        if DEBUG_ENABLED:
+            print("Starting camera thread")
         cam_t = threading.Thread(target=camera_thread, daemon=True)
         cam_t.start()
         
         # 2. Start Flask in the main thread
         # Use threaded=True so Flask can handle multiple browser connections simultaneously
-        print("Start Flask in debug mode")
-        app.run(host='0.0.0.0', port=5000, debug=False, threaded=True, use_reloader=False)
+        if DEBUG_ENABLED:
+            print("Start Flask in debug mode")
+        app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
         
     except KeyboardInterrupt:
         evt.set()
