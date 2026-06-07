@@ -1,31 +1,84 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Bambu Labs A1 Stream</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>tCam Live Thermal Stream</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; background: #222; color: #fff; }
-        .container { margin-top: 30px; }
-        
-        /* Controls wrapper styling */
-        .controls { margin-bottom: 20px; }
-        select { 
-            padding: 8px 12px; 
-            font-size: 14px; 
-            background: #444; 
-            color: #fff; 
-            border: 1px solid #555; 
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            background-color: #1e1e24;
+            color: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            margin-bottom: 25px;
+            color: #00adb5;
+        }
+
+        .controls {
+            margin-bottom: 25px;
+            background-color: #2a2a35;
+            padding: 15px;
+            border-radius: 8px;
+            display: inline-block;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        label {
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        select {
+            padding: 8px 16px;
+            font-size: 14px;
+            background-color: #3e3e4f;
+            color: #ffffff;
+            border: 1px solid #555;
             border-radius: 4px;
             cursor: pointer;
+            outline: none;
+            transition: background 0.2s;
+        }
+
+        select:hover {
+            background-color: #4e4e64;
         }
 
         .stream-wrapper {
             display: inline-flex;
             align-items: stretch;
             justify-content: center;
-            gap: 15px;
+            gap: 20px;
+            background-color: #2a2a35;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.4);
         }
 
-        img { border: 4px solid #555; border-radius: 8px; max-width: 100%; height: auto; display: block; }
+        .image-container {
+            position: relative;
+            cursor: crosshair;
+        }
+
+        img {
+            border: 3px solid #3e3e4f;
+            border-radius: 6px;
+            max-width: 100%;
+            height: auto;
+            display: block;
+            image-rendering: pixelated; /* Keeps thermal pixels crisp when scaled */
+            pointer-events: auto;
+        }
 
         .colorbar-container {
             display: flex;
@@ -34,29 +87,63 @@
             align-items: center;
             font-weight: bold;
             font-size: 14px;
+            width: 70px;
+            padding: 5px 0;
         }
 
         .colorbar {
             width: 25px;
             flex-grow: 1;
-            margin: 5px 0;
-            border: 2px solid #555;
+            margin: 8px 0;
+            border: 2px solid #4e4e64;
             border-radius: 4px;
+            background: linear-gradient(to bottom, #ff0000, #0000ff);
+            transition: background 0.1s ease;
+        }
+
+        .label {
+            background-color: #3e3e4f;
+            padding: 4px 8px;
+            border-radius: 4px;
+            min-width: 55px;
+        }
+
+        #pixel-info {
+            margin-top: 25px;
+            background-color: #2a2a35;
+            padding: 15px;
+            border-radius: 8px;
+            display: inline-block;
+            min-width: 350px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            font-size: 16px;
+            border-left: 5px solid #00adb5;
+        }
+
+        .temp-display {
+            font-size: 24px;
+            color: #ff4757;
+            margin-top: 5px;
+            font-weight: bold;
         }
     </style>
 </head>
 <body>
+
     <div class="container">
-        <h1>Bambu Labs A1 Web Feed</h1>
+        <h1>tCam Live Thermal Feed</h1>
         
         <div class="controls">
-            <label for="palette-select">Choose Palette: </label>
-            <select id="palette-select">
-                </select>
+            <label for="palette-select">Color Palette: </label>
+            <select id="palette-select"></select>
         </div>
         
+        <br>
+
         <div class="stream-wrapper">
-            <img src="/video_feed" alt="Raspberry Pi Live Stream" />
+            <div class="image-container">
+                <img id="stream-img" src="/video_feed" alt="Thermal Stream Disconnected" onload="updateColorbar()" />
+            </div>
 
             <div class="colorbar-container">
                 <div id="min-label" class="label">--</div>
@@ -64,56 +151,110 @@
                 <div id="max-label" class="label">--</div>
             </div>
         </div>
+
+        <br>
+
+        <div id="pixel-info">
+            <div>Click anywhere on the thermal image to sample local temperatures.</div>
+        </div>
     </div>
 
     <script>
-let dropdownPopulated = false;
+        let dropdownPopulated = false;
 
-function updateColorbar() {
-    fetch('/colorbar_config')
-        .then(response => {
-            if (!response.ok) throw new Error("Server went down");
-            return response.json();
-        })
-        .then(data => {
-            const selectEl = document.getElementById('palette-select');
-            
-            // 🚀 FIX 1: If the server restarted, clear and rebuild options dynamically
-            if (!dropdownPopulated || selectEl.children.length === 0) {
-                selectEl.innerHTML = ""; // Wipe old stale options
-                data.all_palettes.forEach(name => {
-                    let option = document.createElement('option');
-                    option.value = name;
-                    option.innerText = name;
-                    if (name === data.current_palette) option.selected = true;
-                    selectEl.appendChild(option);
+        // 1. Manages Configuration Sync and Self-Healing Network Updates
+        function updateColorbar() {
+            fetch('/colorbar_config')
+                .then(response => {
+                    if (!response.ok) throw new Error("Server offline");
+                    return response.json();
+                })
+                .then(data => {
+                    const selectEl = document.getElementById('palette-select');
+                    
+                    if (!dropdownPopulated || selectEl.children.length === 0) {
+                        selectEl.innerHTML = ""; 
+                        data.all_palettes.forEach(name => {
+                            let option = document.createElement('option');
+                            option.value = name;
+                            option.innerText = name;
+                            if (name === data.current_palette) option.selected = true;
+                            selectEl.appendChild(option);
+                        });
+                        dropdownPopulated = true;
+                    }
+
+                    // Dynamically map limits 
+                    document.getElementById('max-label').innerText = data.max_val;
+                    document.getElementById('min-label').innerText = data.min_val;
+                    
+                    // Render CSS linear gradient configuration matrix
+                    const gradientColors = data.palette_colors.join(', ');
+                    document.getElementById('color-bar').style.background = `linear-gradient(to bottom, ${gradientColors})`;
+                })
+                .catch(err => {
+                    console.warn('Disconnected from backend. Retrying handshake...');
+                    dropdownPopulated = false; 
+                    const img = document.getElementById('stream-img');
+                    if (img) {
+                        img.src = "/video_feed?t=" + new Date().getTime();
+                    }
                 });
-                dropdownPopulated = true;
-            }
+        }
 
-            // Update text labels and gradient strip smoothly
-            document.getElementById('max-label').innerText = data.max_val;
-            document.getElementById('min-label').innerText = data.min_val;
-            const gradientColors = data.palette_colors.join(', ');
-            document.getElementById('color-bar').style.background = `linear-gradient(to bottom, ${gradientColors})`;
-        })
-        .catch(err => {
-            console.warn('Lost connection to webcam.py. Retrying...');
-            
-            // 🚀 FIX 2: If server dies, reset memory flags so it rebuilds properly on wake
-            dropdownPopulated = false; 
-            
-            // Force the broken video element to re-hook its stream source when server wakes up
-            const img = document.getElementById('stream-img');
-            if (img) {
-                // Appending a random timestamp parameter trick forces the browser to reconnect
-                img.src = "/video_feed?t=" + new Date().getTime();
-            }
+        // 2. Transmits Dropdown Selections back to the backend
+        document.getElementById('palette-select').addEventListener('change', function(event) {
+            fetch('/select_palette', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ palette: event.target.value })
+            })
+            .then(() => updateColorbar());
         });
-}
 
-// Keep the lifecycle loop active so it self-heals the moment python comes back online
-setInterval(updateColorbar, 2000);
+        // 3. Captures Click Coordinates and Requests Spot Temperature Data
+        document.getElementById('stream-img').addEventListener('click', function(event) {
+            const img = event.target;
+            const rect = img.getBoundingClientRect();
+            
+            const clickX = event.clientX - rect.left;
+            const clickY = event.clientY - rect.top;
+            
+            const nativeWidth = img.naturalWidth || 160; 
+            const nativeHeight = img.naturalHeight || 120;
+            
+            let actualX = Math.floor((clickX / rect.width) * nativeWidth);
+            let actualY = Math.floor((clickY / rect.height) * nativeHeight);
+            
+            // Constrain numbers to legal array boundaries
+            if (actualX >= nativeWidth)  actualX = nativeWidth - 1;
+            if (actualY >= nativeHeight) actualY = nativeHeight - 1;
+            if (actualX < 0) actualX = 0;
+            if (actualY < 0) actualY = 0;
+
+            fetch('/get_pixel_color', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ x: actualX, y: actualY })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    const infoDiv = document.getElementById('pixel-info');
+                    // 🚀 REMODELLED: Visual layout optimized to show large dynamic temperature data
+                    infoDiv.innerHTML = `
+                        <strong>Pixel Coordinate:</strong> (${data.x}, ${data.y}) <br>
+                        <div class="temp-display">${data.temp}</div>
+                    `;
+                } else {
+                    console.error("Sampling rejected:", data.message);
+                }
+            })
+            .catch(err => console.error('Error handling pixel parsing array request:', err));
+        });
+
+        // Loop background heartbeat to instantly reconnect if process restarts
+        setInterval(updateColorbar, 2000);
     </script>
 </body>
 </html>

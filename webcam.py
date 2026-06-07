@@ -54,7 +54,10 @@ ROTATE_IMAGE = 0
 SLEEP_TIME = 0.3
 IMAGE_MIN = 0.0
 IMAGE_MAX = 0.0
+IMAGE_SCALE_FACTOR = 4
 T_LINEAR_RES = 0.01
+RAW_TEMPERATURES = None
+RGB_GRID = None
 PALETTE_DATA = {
     "black_hot":black_hot.black_hot_palette,
     "blue_red":blue_red.blue_red_palette,
@@ -72,8 +75,7 @@ PALETTE_DATA = {
     "wheel2":wheel2.wheel2_palette
 }
 
-chosen = "black_hot" # initial palette - matches spinner
-# Frontend HTML Framework, read from disk
+chosen = "black_hot" # initial palette - matches spinner # Frontend HTML Framework, read from disk
 HTML_TEMPLATE = ""
 
 #
@@ -119,7 +121,7 @@ def load_template(html_path="template.html"):
 # get the min/max values from the camera
 #
 def get_linear_res():
-    global tcam
+    global tcam, T_LINEAR_RES
     
     # OEM Mask 
     #
@@ -192,13 +194,14 @@ def generate_stream():
 # Convert the raw camera data into an array of (r, g, b) values
 #
 def convert(img):
-    global IMAGE_MIN, IMAGE_MAX
+    global IMAGE_MIN, IMAGE_MAX, RAW_TEMPERATURES
 
     if DEBUG_ENABLED:
-        print(f"Enetering convert - CURRENT_PALETTE={CURRENT_PALETTE}")
+        print(f"Enetering convert")
     
     dimg = base64.b64decode(img["radiometric"])
     nra = np.array(array('H', dimg), dtype=np.uint16)
+    RAW_TEMPERATURES = nra.reshape(120, 160)
     
     imgmin = nra.min()
     imgmax = nra.max()
@@ -206,7 +209,6 @@ def convert(img):
 
     # Create an array of your chosen colors (e.g., 256 colors mapped out)
     palette_lut = np.array(CURRENT_PALETTE, dtype=np.uint8)
-    # breakpoint()
     # Normalize your raw radiometric values directly into indices [0-255] 
     # instead of looping through each pixel.
     normalized_frame = (((nra - imgmin) / delta * 255)).astype(np.uint8)
@@ -230,7 +232,7 @@ def convert(img):
 #
 def camera_thread():
     """Background thread that continuously reads from the camera."""
-    global frame_image, tcam, IP_ADDRESS, ROTATE_IMAGE, cam_t
+    global frame_image, tcam, IP_ADDRESS, ROTATE_IMAGE, RGB_GRID, IMAGE_SCALE_FACTOR,  cam_t
 
     if DEBUG_ENABLED:
         print("Entering camera_thread")
@@ -256,7 +258,6 @@ def camera_thread():
         tcam_json = None
         try:
             tcam_json = tcam.get_frame()
-            # tcam_json = tcam.get_image()
             if tcam.frameQueue.empty():
                 time.sleep(SLEEP_TIME)
                 pass
@@ -276,22 +277,23 @@ def camera_thread():
             with frame_lock:
                 image = convert(tcam_json)
                 rgb_array = np.array(image, dtype=np.uint8)
-                rgb_grid = rgb_array.reshape(120, 160,3)
+                RGB_GRID = rgb_array.reshape(120, 160,3)
                 # 1. Rotate instantly in NumPy space before making a PIL image
                 # k=1 is 90°, k=2 is 180°, k=3 is 270°. (Pass axes=(0,1) for counter-clockwise)
                 if ROTATE_IMAGE == 90:
-                    rgb_grid = np.rot90(rgb_grid, k=3) 
+                    RGB_GRID = np.rot90(RGB_GRID, k=3) 
                 elif ROTATE_IMAGE == 180:
-                 rgb_grid = np.rot90(rgb_grid, k=2)
+                 RGB_GRID = np.rot90(RGB_GRID, k=2)
                 elif ROTATE_IMAGE == 270:
-                    rgb_grid = np.rot90(rgb_grid, k=1)
+                    RGB_GRID = np.rot90(RGB_GRID, k=1)
                     
                 # 2. Build the image directly from the pre-rotated NumPy matrix
-                frame_image = Image.fromarray(rgb_grid, mode='RGB')
+                frame_image = Image.fromarray(RGB_GRID, mode='RGB')
                     
                 # 3. Scale using NEAREST or BOX (Dramatically faster than LANCZOS)
                 # It completely drops processing time and keeps thermal pixel values intact
-                new_size = (frame_image.width * 4, frame_image.height * 4)
+                new_size = (frame_image.width *  IMAGE_SCALE_FACTOR,
+                            frame_image.height *  IMAGE_SCALE_FACTOR)
                 frame_image = frame_image.resize(new_size, resample=Image.Resampling.NEAREST)
 
 
@@ -348,6 +350,42 @@ def select_palette():
     
     
     return jsonify({"status": "error", "message": "Invalid palette"}), 400
+
+@app.route('/get_pixel_color', methods=['POST'])
+def get_pixel_color():
+    global RGB_GRID, IMAGE_SCALE_FACTOR, RAW_TEMPERATURES, T_LINEAR_RES
+    
+    if DEBUG_ENABLED:
+        print(f"Entering get_pixel_color")
+        
+    if RAW_TEMPERATURES is None:
+        return jsonify({"status": "error", "message": "No image data available"}), 400
+
+    data = request.get_json()
+    # normalize the values to RGB_GRID
+    x = int(data.get('x', 0)/ IMAGE_SCALE_FACTOR)
+    y = int(data.get('y', 0)/ IMAGE_SCALE_FACTOR)
+    
+    # Check array bounds to prevent IndexError 
+    # Remember: NumPy arrays are indexed as (row, column) which maps to (y, x)
+    # The image is resized so use it;s values
+    height, width = RAW_TEMPERATURES.shape
+    if 0 <= x < width and 0 <= y < height:
+        # Extract the RGB values for that specific coordinate
+        t = RAW_TEMPERATURES[y, x]
+        temp_celsius = ( t / (1/T_LINEAR_RES)) - 273.15
+
+        # Convert to Hex string for easy styling in JavaScript
+        #hex_color = f"#{r:02x}{g:02x}{b:02x}"
+        
+        return jsonify({
+            "status": "success",
+            "x": x,
+            "y": y,
+            "temp": f"{temp_celsius:.1f} °C" # Formats nicely to one decimal place
+        })
+        
+    return jsonify({"status": "error", "message": "Coordinates out of bounds"}), 400
 
 
 ########### Main Program ############
