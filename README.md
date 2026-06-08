@@ -1,58 +1,118 @@
-# tCam Webcam
+# tCamWebcam
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
+An optimized, low-latency utility bridge that transforms raw radiometric data from the **tCam-mini** thermal imaging camera into a standard MJPEG webcam stream and web dashboard. Built using a multi-threaded Python architecture, it is designed for high-frame-rate performance on single-board computers and embedded Linux environments.
 
-`tCamWebcam` is a Python utility designed to interface with **tCam** and **tCam-Mini** thermal imaging cameras. It captures raw radiometric thermal streams over local network sockets and bridges them to a web page.
-
-This allows you to seamlessly integrate your thermal camera feed into any web browser. For example this can be used to monitor your 3D printer to verify print bed and nozzle temperatures during printing
-
-<img width="1266" height="1037" alt="image" src="https://github.com/user-attachments/assets/a38100c1-a6bd-49fa-a55d-f1ef0363529b" />
+<img width="977" height="1019" alt="image" src="https://github.com/user-attachments/assets/35d49132-6fe8-4227-9a3e-8ccdf46046a4" />
 
 
-## Features
+## 🚀 Key Features in `webcam.py`
 
-- **Network-to-Web Page Bridge:** Real-time capture and decoding of radiometric thermal data streams via TCP/IP.
-- **Webcam Output:** Exposes the processed stream on a web page in a web browser (e.g. Chrome) 
-- **Color Palette Mapping:** Real-time application of thermal colormaps (e.g., Ironbow, Rainbow, Jet, Magma).
-- **Lightweight & Modular:** Built with Python for easy integration into custom automation or analysis workflows.
+* **Multi-Threaded Frame Pipeline:** Separates the Flask web server from the camera data acquisition loop. Frame processing and network streaming run on independent threads to eliminate blocking and minimize latency.
+* **NumPy-Accelerated Radiometric Processing:** Replaces slow Python loops with vectorized NumPy operations for per-pixel temperature mapping, scaling, and color-mapping.
+* **High-Speed Image Manipulations:** Utilizes native NumPy space operations for rapid image rotations and applies high-performance `NEAREST` or `BOX` resampling filters for low-overhead image scaling.
+* **Optimized JSON Parsing:** Integrates `orjson` to handle high-throughput command parsing and metadata processing with minimal CPU overhead.
+* **Low-Latency Networking:** Leverages tuned TCP socket configurations, including `TCP_NODELAY`, to ensure immediate frame dispatch over the network.
+* **Integrated Flask Web Interface:** Serves a lightweight web dashboard that provides a real-time MJPEG live feed alongside camera telemetry.
 
-## Prerequisites
+---
 
-### Hardware
-- A **tCam** or **tCam-Mini** thermal camera.
-- A local network connection between your host computer and the camera.
+## 🛠️ Architecture Overview
 
-### Software (Linux/Ubuntu)
-To expose the stream as a virtual webcam, you need the V4L2 loopback kernel module:
+The core of `webcam.py` relies on an asynchronous producer-consumer model:
+
+```
+[ tCam-mini Hardware ] 
+          │ (Radiometric Data via Sockets / Serial)
+          ▼
+┌────────────────────────────────────────────────────────┐
+│ webcam.py (Data Acquisition Thread)                   │
+│  ├── orjson parsing                                   │
+│  └── NumPy Vectorized Operations (Scaling/Rotation)   │
+└─────────────────────────┬──────────────────────────────┘
+                          │ (Thread-Safe Frame Buffer)
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ Flask Web Server (Streaming Thread)                    │
+│  ├── MJPEG Video Stream Generator                      │
+│  └── Telemetry & Web UI Endpoints                      │
+└─────────────────────────┬──────────────────────────────┘
+                          │ (TCP_NODELAY Optimized)
+                          ▼
+                 [ Web Browser / Client ]
+
+```
+
+---
+
+## 📦 Prerequisites & Installation
+
+### 1. System Dependencies
+
+Ensure your environment is ready for building C-based Python extensions (required for high-performance libraries like `orjson`):
 
 ```bash
-sudo apt update
-sudo apt install v4l2loopback-dkms v4l2loopback-utils
-# Load the module to create /dev/video9
-sudo modprobe v4l2loopback video_nr=9 card_label="tCam Virtual Webcam" exclusive_caps=1
+sudo apt-get update
+sudo apt-get install python3-dev build-essential
+
 ```
 
+### 2. Python Dependencies
 
-## Installation
+Install the highly optimized pipeline dependencies:
 
-### Clone the repository
+```bash
+pip install flask numpy orjson pillow
 
+depending on your local python configuration, addition library installations may be required
 
-git clone [https://github.com/yaturner/tCamWebcam.git](https://github.com/yaturner/tCamWebcam.git)
-cd tCamWebcam
-
-## Usage
-
-Run the primary application by specifying your camera's IP address:
-
-```Bash
-python webcam.py --ip <CAMERA_IP_ADDRESS>
 ```
 
+---
 
-## License
-This project is licensed under the MIT License. See the LICENSE file for details.
+## 🔧 Configuration & Usage
 
-## Acknowledgments
-Built for use with tCam/tCam-Mini thermal imaging hardware and software from [Dan Julio Designs](https://danjuliodesigns.com/products/tcam_mini.html)
+Launch the bridge utility directly by executing the primary script:
+
+```bash
+python3 webcam.py --ip <camera ip address> --palette <initial palette name> --rotate_image <degrees
+
+```
+
+### Command Line Arguments
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--ip` | `string` | `192.168.4.1` | The ip address of the camera. |
+| `--palette` | `string` | `black_hot` | Inital palette for the camera image. |
+| `--rotate_image` | `int` | `0` | Image rotation in degrees (`0`, `90`, `180`, `270`). |
+| `--debug_enabled` | `boolean` | false | print useless debugging info (true, false). |
+
+These may also be specified in a **config.json** file, a example of which is included in the repo
+
+Once webcam is running go to your browser and navigate to **hostname:5000**, where **hostname** is the name (or ip address) of the computer where **webcam** is running
+
+---
+
+### Features
+
+- A drop down spinner which allows the user to select the palette used to display the image
+- Hotspot feedback, clicking anywhere in the displayed image will report the temperature at that coordinate in the image
+
+
+## 📈 Performance Engineering Highlights
+
+To maintain a consistent, real-time thermal video stream, the following performance strategies are embedded directly into `webcam.py`:
+
+* **Vectorization over Loops:** Pure Python loops for pixel-by-pixel color lookup or temperature conversion are strictly avoided. Arrays are explicitly cast to NumPy structures, maximizing CPU cache efficiency via `astype()` and vectorized math.
+* **Zero-Copy Memory Considerations:** Image data is kept in standard byte/array buffers for as long as possible before being encoded to JPEG, reducing memory allocation thrashing.
+* **Non-Blocking Flask Handlers:** The MJPEG stream generator yields frames from a thread-safe global ring buffer, ensuring that sluggish network clients do not slow down the camera's ingestion thread.
+
+---
+
+## 🤝 Contributing
+
+Contributions optimized for speed and efficiency are always welcome. If you find type-casting bugs, race conditions, or further vectorization opportunities, please open an issue or submit a pull request.
+
+---
+
+
