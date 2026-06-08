@@ -1,6 +1,6 @@
 # tCamWebcam
 
-An optimized, low-latency utility bridge that transforms raw radiometric data from the **tCam-mini** thermal imaging camera into a standard MJPEG webcam stream and web dashboard. Built using a multi-threaded Python architecture, it is designed for high-frame-rate performance on single-board computers and embedded Linux environments.
+An optimized, low-latency utility bridge that transforms raw radiometric data from the **tCam-mini** thermal imaging camera into a standard MJPEG webcam stream and web dashboard. Built using a multi-threaded Python architecture, it is designed for high-frame-rate performance on single-board computers and desktop environments.
 
 <img width="977" height="1019" alt="image" src="https://github.com/user-attachments/assets/8d72fe4e-8605-4fd0-b2d8-3191db53c014" />
 
@@ -64,7 +64,7 @@ Install the highly optimized pipeline dependencies:
 ```bash
 pip install flask numpy orjson pillow
 
-depending on your local python configuration, addition library installations may be required
+depending on your local python configuration, additional library installations may be required
 
 ```
 
@@ -72,7 +72,7 @@ depending on your local python configuration, addition library installations may
 
 ## 🔧 Configuration & Usage
 
-Launch the bridge utility directly by executing the primary script:
+Launch t**webcam** by executing:
 
 ```bash
 python3 webcam.py --ip <camera ip address> --palette <initial palette name> --rotate_image <degrees
@@ -97,7 +97,7 @@ Once webcam is running go to your browser and navigate to **hostname:5000**, whe
 ### Features
 
 - A drop down spinner which allows the user to select the palette used to display the image
-- Hotspot feedback, clicking anywhere in the displayed image will report the temperature at that coordinate in the image
+- Hotspot feedback, clicking anywhere in the displayed image will report the temperature at that coordinate
 
 
 ## 📈 Performance Engineering Highlights
