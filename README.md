@@ -2,7 +2,8 @@
 
 An optimized, low-latency utility bridge that transforms raw radiometric data from the **tCam-mini** thermal imaging camera into a standard MJPEG webcam stream and web dashboard. Built using a multi-threaded Python architecture, it is designed for high-frame-rate performance on single-board computers and embedded Linux environments.
 
-<img width="977" height="1019" alt="image" src="https://github.com/user-attachments/assets/35d49132-6fe8-4227-9a3e-8ccdf46046a4" />
+<img width="977" height="1019" alt="image" src="https://github.com/user-attachments/assets/8d72fe4e-8605-4fd0-b2d8-3191db53c014" />
+
 
 
 ## 🚀 Key Features in `webcam.py`
