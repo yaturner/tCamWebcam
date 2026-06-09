@@ -56,6 +56,8 @@ IMAGE_MIN = 0.0
 IMAGE_MAX = 0.0
 IMAGE_SCALE_FACTOR = 4
 T_LINEAR_RES = 0.01
+CLICKED_X = None
+CLICKED_Y = None
 RAW_TEMPERATURES = None
 RGB_GRID = None
 PALETTE_DATA = {
@@ -286,7 +288,33 @@ def camera_thread():
                  RGB_GRID = np.rot90(RGB_GRID, k=2)
                 elif ROTATE_IMAGE == 270:
                     RGB_GRID = np.rot90(RGB_GRID, k=1)
+                # 1. Draw the square around the hotspot if there is one
+                if CLICKED_X is not None and CLICKED_Y is not None:
+                    # Define the radius of your square (radius 2 means a 5x5 pixel box)
+                    if CLICKED_X is not None and CLICKED_Y is not None:
+                        radius = 3  # A radius of 3 gives a nice, distinct box size
+                        height, width, _ = RGB_GRID.shape
+                        
+                        # 1. Calculate boundaries and clamp them inside array limits
+                        y_min = max(0, CLICKED_Y - radius)
+                        y_max = min(height - 1, CLICKED_Y + radius)
+                        x_min = max(0, CLICKED_X - radius)
+                        x_max = min(width - 1, CLICKED_X + radius)
+                        
+                        # 2. Get your adaptive contrast color
+                        bg_color = RGB_GRID[CLICKED_Y, CLICKED_X]
+                        box_color = 255 - bg_color
+                        
+                        # 3. DRAW STRIPS (Using inclusive indexing to lock the corners)
+                        # Top and Bottom horizontal lines (Includes the corner columns)
+                        RGB_GRID[y_min, x_min:x_max+1] = box_color
+                        RGB_GRID[y_max, x_min:x_max+1] = box_color
+                        
+                        # Left and Right vertical lines (Includes the corner rows)
+                        RGB_GRID[y_min:y_max+1, x_min] = box_color
+                        RGB_GRID[y_min:y_max+1, x_max] = box_color
                     
+                # Now proceed with your existing PIL conversion:
                 # 2. Build the image directly from the pre-rotated NumPy matrix
                 frame_image = Image.fromarray(RGB_GRID, mode='RGB')
                     
@@ -353,7 +381,7 @@ def select_palette():
 
 @app.route('/get_pixel_color', methods=['POST'])
 def get_pixel_color():
-    global RGB_GRID, IMAGE_SCALE_FACTOR, RAW_TEMPERATURES, T_LINEAR_RES
+    global RGB_GRID, IMAGE_SCALE_FACTOR, RAW_TEMPERATURES, T_LINEAR_RES, CLICKED_X, CLICKED_Y
     
     if DEBUG_ENABLED:
         print(f"Entering get_pixel_color")
@@ -371,6 +399,9 @@ def get_pixel_color():
     # The image is resized so use it;s values
     height, width = RAW_TEMPERATURES.shape
     if 0 <= x < width and 0 <= y < height:
+        # save the location
+        CLICKED_X = x
+        CLICKED_Y = y
         # Extract the RGB values for that specific coordinate
         t = RAW_TEMPERATURES[y, x]
         temp_celsius = ( t / (1/T_LINEAR_RES)) - 273.15
