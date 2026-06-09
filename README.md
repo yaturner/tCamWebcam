@@ -109,7 +109,16 @@ To maintain a consistent, real-time thermal video stream, the following performa
 * **Non-Blocking Flask Handlers:** The MJPEG stream generator yields frames from a thread-safe global ring buffer, ensuring that sluggish network clients do not slow down the camera's ingestion thread.
 
 ---
+## Known Issues
+- The page needs to be *reload*ed before the image will appear when first started, this needs to be fixed
+- The initial colorbar palette is rainbos, it should be black_hot to match spinner
 
+---
+
+## Acknowledgements
+This is based on the work of [Dan Julio Designs](https://github.com/danjulio/tCam), and 
+[Todd LaWall aka bitreaper](https://github.com/danjulio/tCam/tree/main/python) who wrote the excellent python API 
+  
 ## 🤝 Contributing
 
 Contributions optimized for speed and efficiency are always welcome. If you find type-casting bugs, race conditions, or further vectorization opportunities, please open an issue or submit a pull request.
