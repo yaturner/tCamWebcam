@@ -111,7 +111,6 @@ To maintain a consistent, real-time thermal video stream, the following performa
 ---
 ## Known Issues
 - The page needs to be *reload*ed before the image will appear when first started, this needs to be fixed
-- The initial colorbar palette is rainbos, it should be black_hot to match spinner
 
 ---
 
