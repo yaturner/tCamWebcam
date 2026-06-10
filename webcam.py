@@ -47,7 +47,6 @@ frame_image = None
 frame_lock = threading.Lock()
 tcam = None
 DEBUG_ENABLED = False
-CURRENT_PALETTE = black_hot.black_hot_palette
 IMAGE_PATH="./thermalImage.jpg"
 IP_ADDRESS = "192.168.4.1"
 ROTATE_IMAGE = 0
@@ -77,7 +76,10 @@ PALETTE_DATA = {
     "wheel2":wheel2.wheel2_palette
 }
 
-chosen = "black_hot" # initial palette - matches spinner # Frontend HTML Framework, read from disk
+chosen = "black_hot" # initial palette - matches spinner
+hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in PALETTE_DATA[chosen]]
+
+# Frontend HTML Framework, read from disk
 HTML_TEMPLATE = ""
 
 #
@@ -87,8 +89,8 @@ COLORBAR_CONFIG = {
     "min_val": "0 °C",
     "max_val": "85 °C",
     # CSS gradient format: list of hex colors from TOP (max) to BOTTOM (min)
-    "current_palette": ["#ff0000", "#ffaa00", "#00ff00", "#00aaff", "#0000ff"],
-    "palette_colors" : [palettes],
+    "current_palette": chosen,
+    "palette_colors" : hex_palette,
     "all_palettes": [palettes.keys()]
 }
 
@@ -210,7 +212,7 @@ def convert(img):
     delta = imgmax - imgmin
 
     # Create an array of your chosen colors (e.g., 256 colors mapped out)
-    palette_lut = np.array(CURRENT_PALETTE, dtype=np.uint8)
+    palette_lut = np.array(PALETTE_DATA[chosen], dtype=np.uint8)
     # Normalize your raw radiometric values directly into indices [0-255] 
     # instead of looping through each pixel.
     normalized_frame = (((nra - imgmin) / delta * 255)).astype(np.uint8)
@@ -269,7 +271,6 @@ def camera_thread():
             time.sleep(SLEEP_TIME)
             pass
         
-        # breakpoint()
         if not tcam_json:  
             if DEBUG_ENABLED:
                 print(f"empty response from camera {tcam_json}")
@@ -353,7 +354,7 @@ def colorbar_config():
     if DEBUG_ENABLED:
         print(f"chosen palette is {chosen}")
     hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in PALETTE_DATA[chosen]]
-    COLORBAR_CONFIG["current_palette"] = hex_palette
+    COLORBAR_CONFIG["current_palette"] = chosen
     COLORBAR_CONFIG["palette_colors"] = hex_palette
     COLORBAR_CONFIG["all_palettes"] = list(palettes.keys())
     return jsonify(COLORBAR_CONFIG)
@@ -362,19 +363,18 @@ def colorbar_config():
 # NEW ENDPOINT: Receives the chosen palette from the UI
 @app.route('/select_palette', methods=['POST'])
 def select_palette():
-    global CURRENT_PALETTE, chosen
+    global chosen
     
     data = request.get_json()
     chosen = data.get('palette')
     
     if chosen in list(palettes.keys()):
-        CURRENT_PALETTE = PALETTE_DATA[chosen]
         if DEBUG_ENABLED:
             print(f"Python: Palette changed to {chosen}") # Tracks it in your terminal
         hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in PALETTE_DATA[chosen]]
-        COLORBAR_CONFIG["current_palette"] = hex_palette
+        COLORBAR_CONFIG["current_palette"] = chosen
 
-        return jsonify({"status": "success", "palette": CURRENT_PALETTE})
+        return jsonify({"status": "success", "palette": PALETTE_DATA[chosen]})
     
     
     return jsonify({"status": "error", "message": "Invalid palette"}), 400
@@ -437,7 +437,7 @@ if __name__ == '__main__':
     # 2. Get the IP from config if available, otherwise set a default fallback
     default_ip = config.get("ip", "192.168.4.1")
     ROTATE_IMAGE = config.get("rotate_image", 0)
-    chosen = config.get("palette", "rainbow")
+    chosen = config.get("palette", "black_hot")
     DEBUG_ENABLED = config.get("debug_enabled", False)
     
     # Passing default_ip here allows CLI args to override the JSON file if explicitly provided
@@ -489,6 +489,11 @@ if __name__ == '__main__':
             print(f"Unknown palette - {args.palette}")
         else:
             chosen = args.palette
+            hex_palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in PALETTE_DATA[chosen]]
+            COLORBAR_CONFIG["current_palette"] = chosen
+            COLORBAR_CONFIG["palette_colors"] = hex_palette
+
+            
 
     if args.debug_enabled:
         DEBUG_ENABLED = args.debug_enabled
