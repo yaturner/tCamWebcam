@@ -187,10 +187,19 @@
                     // Dynamically map limits 
                     document.getElementById('max-label').innerText = data.max_val;
                     document.getElementById('min-label').innerText = data.min_val;
+                    document.getElementById('color-bar').style.background = `linear-gradient(to bottom, ${gradientColors})`;
                     
                     // Render CSS linear gradient configuration matrix
                     const gradientColors = data.palette_colors.join(', ');
-                    document.getElementById('color-bar').style.background = `linear-gradient(to bottom, ${gradientColors})`;
+
+	            // 🚀 Continuously update the hotspot element if a target is locked
+                    const infoDiv = document.getElementById('pixel-info');
+                    if (data.has_hotspot) {
+                          infoDiv.innerHTML = `
+                             <strong>Selected Matrix Index:</strong> (${data.hotspot_x}, ${data.hotspot_y}) <br>
+                             <div class="temp-display">${data.hotspot_temp}</div>
+                          `;
+                     }
                 })
                 .catch(err => {
                     console.warn('Disconnected from backend. Retrying handshake...');

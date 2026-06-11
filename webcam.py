@@ -91,7 +91,12 @@ COLORBAR_CONFIG = {
     # CSS gradient format: list of hex colors from TOP (max) to BOTTOM (min)
     "current_palette": chosen,
     "palette_colors" : hex_palette,
-    "all_palettes": [palettes.keys()]
+    "all_palettes": [palettes.keys()],
+    "has_hotspot": False,
+    "hotspot_x": None,
+    "hotspot_y": None,
+    "hotspot_temp": None
+
 }
 
 #
@@ -297,10 +302,10 @@ def camera_thread():
                         height, width, _ = RGB_GRID.shape
                         
                         # 1. Calculate boundaries and clamp them inside array limits
-                        y_min = max(0, CLICKED_Y - radius)
-                        y_max = min(height - 1, CLICKED_Y + radius)
-                        x_min = max(0, CLICKED_X - radius)
-                        x_max = min(width - 1, CLICKED_X + radius)
+                        y_min = max(0, CLICKED_Y * IMAGE_SCALE_FACTOR - radius)
+                        y_max = min(height - 1, CLICKED_Y * IMAGE_SCALE_FACTOR + radius)
+                        x_min = max(0, CLICKED_X * IMAGE_SCALE_FACTOR - radius)
+                        x_max = min(width - 1, CLICKED_X * IMAGE_SCALE_FACTOR + radius)
                         
                         # 2. Get your adaptive contrast color
                         bg_color = RGB_GRID[CLICKED_Y, CLICKED_X]
@@ -308,6 +313,7 @@ def camera_thread():
                         
                         # 3. DRAW STRIPS (Using inclusive indexing to lock the corners)
                         # Top and Bottom horizontal lines (Includes the corner columns)
+                        # Scale the image co-ord to match the actual image size
                         RGB_GRID[y_min, x_min:x_max+1] = box_color
                         RGB_GRID[y_max, x_min:x_max+1] = box_color
                         
@@ -344,7 +350,7 @@ def video_feed():
 # DYNAMIC ENDPOINT: This generates new values on every API hit
 @app.route('/colorbar_config')
 def colorbar_config():
-    global IMAGE_MIN, IMAGE_MAX, chosen
+    global IMAGE_MIN, IMAGE_MAX, chosen, RAW_TEMPERATURES, CLICKED_X, CLICKED_Y
     
     if DEBUG_ENABLED:
         print(f"Entering colorbar_config- {IMAGE_MIN}, {IMAGE_MAX}")
@@ -357,6 +363,14 @@ def colorbar_config():
     COLORBAR_CONFIG["current_palette"] = chosen
     COLORBAR_CONFIG["palette_colors"] = hex_palette
     COLORBAR_CONFIG["all_palettes"] = list(palettes.keys())
+    COLORBAR_CONFIG["has_hotspot"] = (CLICKED_X is not None and CLICKED_Y is not None)
+
+    if COLORBAR_CONFIG["has_hotspot"] and RAW_TEMPERATURES is not None:
+        live_temp = RAW_TEMPERATURES[CLICKED_Y, CLICKED_X]
+        COLORBAR_CONFIG["hotspot_x"] = CLICKED_X
+        COLORBAR_CONFIG["hotspot_y"] = CLICKED_Y
+        COLORBAR_CONFIG["hotspot_temp"] = f"{live_temp:.1f} °C"
+        
     return jsonify(COLORBAR_CONFIG)
 
 
@@ -379,9 +393,11 @@ def select_palette():
     
     return jsonify({"status": "error", "message": "Invalid palette"}), 400
 
+
+# NEW ENDPOINT: Get hotspot temperature
 @app.route('/get_pixel_color', methods=['POST'])
 def get_pixel_color():
-    global RGB_GRID, IMAGE_SCALE_FACTOR, RAW_TEMPERATURES, T_LINEAR_RES, CLICKED_X, CLICKED_Y
+    global IMAGE_SCALE_FACTOR, RAW_TEMPERATURES, T_LINEAR_RES, CLICKED_X, CLICKED_Y
     
     if DEBUG_ENABLED:
         print(f"Entering get_pixel_color")
@@ -406,9 +422,6 @@ def get_pixel_color():
         t = RAW_TEMPERATURES[y, x]
         temp_celsius = ( t / (1/T_LINEAR_RES)) - 273.15
 
-        # Convert to Hex string for easy styling in JavaScript
-        #hex_color = f"#{r:02x}{g:02x}{b:02x}"
-        
         return jsonify({
             "status": "success",
             "x": x,
